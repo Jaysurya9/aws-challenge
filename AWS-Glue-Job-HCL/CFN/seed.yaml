@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2021-01-10'
+
+Description: "Create CodeBuild project with required IAM/SG/SSM/CW Logs configuration and S3/DynamoDB for Terraform"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Top-level environment configuration"
+        Parameters:
+          - ProjectName
+          - Environment
+      -
+        Label:
+          default: "VPC configuration for CodeBuild"
+        Parameters:
+          - VpcID
+          - PrivateSubnetIDs
+      -
+        Label:
+          default: "IAM configuration"
+        Parameters:
+          - IAMCodeBuildPoliciesARNs
+      -
+        Label:
+          default: "Git repository configuration (e.g. Bitbucket)"
+        Parameters:
+          - ConfigRepoURL
+          - GitSSHPrivateKey
+          - GitBranch
+          - DeploymentDirPath
+
+Parameters:
+  ProjectName:
+    Description: String that will be used as basis for naming S3 bucket, CB project, etc.
+    Type: String
+    Default: aws-challenge
+  Environment:
+    Description: Environmnet type from dev, int, prod
+    Type: String
+    Default: 'dev'
+  VpcID:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC in which CB project will run
+  PrivateSubnetIDs:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of subnets in which CB will run (only private are supported)
+  IAMCodeBuildPoliciesARNs:
+    Description: List of IAM policy ARNs to be attached to CodeBuild role (comma separated string, no spaces)
+    Default: 'arn:aws:iam::aws:policy/AdministratorAccess'
+    Type: String
+  ConfigRepoURL:
+    Description: (Optional)Full ssh URL to configuration repository (starting with ssh://)
+    Type: String
+    Default: 'somerepo.github.com'
+  GitSSHPrivateKey:
+    NoEcho: 'true'
+    Description: Private SSH key to access repositories (read-only is sufficient)
+    Type: String
+  GitBranch:
+    Description: Git branch of config repo to deploy
+    Type: String
+    Default: master
+  DeploymentDirPath:
+    Description: List of ordered space separated Paths in repository to run terraform at
+    Type: String
+    Default: "infrastructure assets"
+  TerraformVersion:
+    Description: Terraform version
+    Type: String
+    Default: '0.12.24'
+Resources:
+  ####################################
+  # PARAMETERS IN SSM PARAMETER STORE:
+  ####################################
+  ProjectName:
+  Type: string
+    Properties:
+        #PropertyName
+        Name: ""
+        Tags:
+        - key : ""
+          value: ""
+        
+  Environment:
+  Type: string
+    Properties:
+        Environment:
+            #dev,int,prod
+            Nmae: ""
+        Tags:
+        - key : ""
+          value: ""
+        
+  ####################################
+  # IAM:
+  ####################################
+  IAMCodeBuildPoliciesARNs:
+  Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2021-01-10
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - ec2.amazonaws.com
+            Action:
+              - 'ec2:Describe*'
+      Path: /system/
+      Policies:
+        - PolicyName: <<EOF
+          PolicyDocument:
+            Version: 2021-01-10
+            Statement:
+              - Effect: Allow
+                Action: 'ec2:Describe*'
+                Resource: '*'
+      Tags:
+        - key : "tag-key"
+          value: "tag-value"
+  RootInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /system/
+      Roles:
+        - !Ref RootRole
+
+  ####################################
+  # VPC resources:
+  ####################################
+  VpcID:
+  Type: AWS::EC2::VPC::Id
+  Properties:
+    CidrBlock: 10.0.0.0/16
+    EnableDnsSupport: 'true'
+    EnableDnsHostnames: 'true'
+    EnableClassicLink: 'false'
+    InstanceTenancy: 'default'
+    Tags:
+        - key : "name"
+          value: "prod-vpc"
+
+          
+  PublicSubnetIDs: 
+  Type: List<AWS::EC2::Subnet::Id>
+  Properties:
+    CidrBlock: 10.0.0.0/24     
+    MapPublicIpOnLaunch: 'true'
+    AvailabilityZone: 'eu-west-2a'
+    Tags:
+    - key : "name"
+      value: "prod-subnet-public-1"
+
+
+  ####################################
+  # CloudWatch Logs
+  ####################################
+  Modules:
+    Module: "lambda-cloudwatch-trigger"
+    Properties:
+        Source: "infrablocks/lambda-cloudwatch-events-trigger/aws"
+        Region: "eu-west-2"
+        Componet: "my-lambda"
+        Deployment_identifier: "production"
+        
+        Lambda_arn:
+        Lambda_Function_Name: "my-lambda"
+        Lambda_Schedule_Expression: "cron(0 20 * * ? *)"
+    
+
+  ####################################
+  # CodeBuild:
+  ####################################
+
+
+  ####################################
+  # Terraform state:
+  ####################################
+  TerraformVersion:
+  Type: string
+  Properties: 
+    Version: "0.12.24"
+
+
+####################################
+# OUTPUTS:
+####################################
+Outputs:
+  CodeBuildURL:
+    Description: URL to CodeBuild project that will run Terraform
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codebuild/projects/${CodeBuildProject}"
